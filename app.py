@@ -1,11 +1,10 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase – alvo antes do stop (por classe)")
+st.title("Scanner Prob5M-Fase – +5% antes de -3% com filtro semanal (EMA 169)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -38,58 +37,41 @@ ativos_scan = sorted(set([
 # =========================================================
 
 lookahead = 21
+alvo = 0.05
+stop = 0.03
+ema_periodo = 169
+
 janela_fase = st.slider("Janela da fase do mês (± dias)", 0, 5, 2)
-ema_semanal = 169
-
-etfs = {
-    "BOVA11.SA","IVVB11.SA","SMAL11.SA","HASH11.SA","GOLD11.SA",
-    "DIVO11.SA","NDIV11.SA","SPUB11.SA"
-}
 
 # =========================================================
-# CLASSIFICAÇÃO E ALVOS
-# =========================================================
-
-def classe_ativo(ticker):
-    if ticker.endswith("34.SA"):
-        return "BDR"
-    if ticker in etfs:
-        return "ETF"
-    if ticker.endswith("11.SA"):
-        return "FII"
-    return "ACAO"
-
-def parametros(classe):
-    if classe == "ACAO":
-        return 0.08, 0.05
-    if classe == "BDR":
-        return 0.06, 0.04
-    # ETF e FII
-    return 0.05, 0.03
-
-# =========================================================
-# FILTRO SEMANAL – EMA 169
+# FILTRO SEMANAL (EMA 169)
 # =========================================================
 
 def passa_filtro_semanal(df):
+
     w = df.resample("W-FRI").last()
-    if len(w) < ema_semanal + 5:
+
+    if len(w) < ema_periodo + 5:
         return False
-    w["ema"] = w["Close"].ewm(span=ema_semanal, adjust=False).mean()
+
+    w["ema"] = w["Close"].ewm(span=ema_periodo, adjust=False).mean()
+
     ultimo = w.iloc[-1]
+
     return ultimo["Close"] > ultimo["ema"]
 
 # =========================================================
-# TESTE DE ALVO ANTES DO STOP
+# TESTE: alvo antes do stop
 # =========================================================
 
-def testa_trade(df, idx, alvo, stop):
-    entrada = df.iloc[idx]["Close"]
+def testa_trade(df, idx):
 
+    entrada = df.iloc[idx]["Close"]
     alvo_px = entrada * (1 + alvo)
     stop_px = entrada * (1 - stop)
 
     for j in range(idx + 1, min(idx + 1 + lookahead, len(df))):
+
         hi = df.iloc[j]["High"]
         lo = df.iloc[j]["Low"]
 
@@ -98,8 +80,10 @@ def testa_trade(df, idx, alvo, stop):
 
         if bate_alvo and bate_stop:
             return 0
+
         if bate_alvo:
             return 1
+
         if bate_stop:
             return -1
 
@@ -125,8 +109,8 @@ if st.button("Rodar scanner"):
             df = yf.download(
                 ticker,
                 period="12y",
-                auto_adjust=False,
-                progress=False
+                progress=False,
+                auto_adjust=False
             )
         except:
             continue
@@ -143,9 +127,7 @@ if st.button("Rodar scanner"):
         except:
             continue
 
-        classe = classe_ativo(ticker)
-        alvo, stop = parametros(classe)
-
+        # mesma fase do mês
         dias_validos = []
         for d in df.index:
             if abs(d.day - hoje) <= janela_fase:
@@ -153,7 +135,6 @@ if st.button("Rodar scanner"):
 
         ganhos = 0
         perdas = 0
-        neutros = 0
 
         for d in dias_validos:
 
@@ -165,14 +146,12 @@ if st.button("Rodar scanner"):
             if idx + lookahead >= len(df):
                 continue
 
-            r = testa_trade(df, idx, alvo, stop)
+            r = testa_trade(df, idx)
 
             if r == 1:
                 ganhos += 1
             elif r == -1:
                 perdas += 1
-            else:
-                neutros += 1
 
         amostras = ganhos + perdas
 
@@ -183,22 +162,19 @@ if st.button("Rodar scanner"):
 
         resultados.append({
             "Ativo": ticker,
-            "Classe": classe,
-            "Gain alvo (%)": alvo * 100,
-            "Stop (%)": stop * 100,
-            "Amostras válidas": amostras,
+            "Amostras": amostras,
             "Gains": ganhos,
             "Loss": perdas,
-            "Probabilidade (%)": round(prob, 2)
+            "Probabilidade +5% antes -3% (%)": round(prob, 2)
         })
 
     if len(resultados) == 0:
-        st.warning("Nenhum ativo passou nos filtros.")
+        st.warning("Nenhum ativo passou no filtro semanal (EMA 169) e na fase do mês.")
     else:
         dfres = pd.DataFrame(resultados)
-        dfres = dfres.sort_values("Probabilidade (%)", ascending=False)
-
-        st.dataframe(
-            dfres,
-            use_container_width=True
+        dfres = dfres.sort_values(
+            "Probabilidade +5% antes -3% (%)",
+            ascending=False
         )
+
+        st.dataframe(dfres, use_container_width=True)
