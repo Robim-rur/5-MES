@@ -1,10 +1,11 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase (filtro semanal por resample, EMA 169)")
+st.title("Scanner Prob5M-Fase – alvo antes do stop (por classe)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -36,177 +37,168 @@ ativos_scan = sorted(set([
 # PARÂMETROS
 # =========================================================
 
-st.sidebar.header("Parâmetros")
+lookahead = 21
+janela_fase = st.slider("Janela da fase do mês (± dias)", 0, 5, 2)
+ema_semanal = 169
 
-janela_fase = st.sidebar.slider("Janela da fase do mês (± dias)", 0, 5, 2)
-anos_historico = st.sidebar.slider("Anos de histórico", 3, 15, 8)
-
-dias_alvo = 21
-alvo = 1.05
-ema_periodos = 169
-
-st.sidebar.write("Sucesso: +5% em até 21 pregões")
-st.sidebar.write("Filtro: semanal acima da EMA 169")
+etfs = {
+    "BOVA11.SA","IVVB11.SA","SMAL11.SA","HASH11.SA","GOLD11.SA",
+    "DIVO11.SA","NDIV11.SA","SPUB11.SA"
+}
 
 # =========================================================
-
-hoje = datetime.now().date()
-dia_referencia = hoje.day
-
-# =========================================================
-# FILTRO SEMANAL CORRETO (resample do diário)
+# CLASSIFICAÇÃO E ALVOS
 # =========================================================
 
-def passa_filtro_semanal(ticker):
+def classe_ativo(ticker):
+    if ticker.endswith("34.SA"):
+        return "BDR"
+    if ticker in etfs:
+        return "ETF"
+    if ticker.endswith("11.SA"):
+        return "FII"
+    return "ACAO"
 
-    df = yf.download(
-        ticker,
-        period="10y",
-        interval="1d",
-        progress=False
-    )
+def parametros(classe):
+    if classe == "ACAO":
+        return 0.08, 0.05
+    if classe == "BDR":
+        return 0.06, 0.04
+    # ETF e FII
+    return 0.05, 0.03
 
-    if df is None or len(df) < 300:
+# =========================================================
+# FILTRO SEMANAL – EMA 169
+# =========================================================
+
+def passa_filtro_semanal(df):
+    w = df.resample("W-FRI").last()
+    if len(w) < ema_semanal + 5:
         return False
-
-    df = df.dropna()
-
-    # semanal padrão B3 (sexta)
-    semanal = pd.DataFrame()
-    semanal["Close"] = df["Close"].resample("W-FRI").last()
-
-    semanal = semanal.dropna()
-
-    if len(semanal) < ema_periodos + 5:
-        return False
-
-    semanal["EMA"] = semanal["Close"].ewm(
-        span=ema_periodos, adjust=False
-    ).mean()
-
-    return semanal["Close"].iloc[-1] > semanal["EMA"].iloc[-1]
-
+    w["ema"] = w["Close"].ewm(span=ema_semanal, adjust=False).mean()
+    ultimo = w.iloc[-1]
+    return ultimo["Close"] > ultimo["ema"]
 
 # =========================================================
-# FUNÇÃO PRINCIPAL
+# TESTE DE ALVO ANTES DO STOP
 # =========================================================
 
-@st.cache_data(show_spinner=False)
-def calcula_probabilidades(tickers, anos, janela_fase, dia_ref):
+def testa_trade(df, idx, alvo, stop):
+    entrada = df.iloc[idx]["Close"]
 
-    fim = pd.Timestamp.today()
-    inicio = fim - pd.DateOffset(years=anos)
+    alvo_px = entrada * (1 + alvo)
+    stop_px = entrada * (1 - stop)
 
-    dados = yf.download(
-        tickers,
-        start=inicio,
-        end=fim,
-        group_by="ticker",
-        auto_adjust=False,
-        threads=True,
-        progress=False
-    )
+    for j in range(idx + 1, min(idx + 1 + lookahead, len(df))):
+        hi = df.iloc[j]["High"]
+        lo = df.iloc[j]["Low"]
 
-    resultados = []
+        bate_alvo = hi >= alvo_px
+        bate_stop = lo <= stop_px
 
-    for ticker in tickers:
+        if bate_alvo and bate_stop:
+            return 0
+        if bate_alvo:
+            return 1
+        if bate_stop:
+            return -1
 
-        try:
-            df = dados[ticker].copy()
-        except Exception:
-            continue
-
-        if df is None or len(df) < 150:
-            continue
-
-        # filtro semanal
-        try:
-            if not passa_filtro_semanal(ticker):
-                continue
-        except Exception:
-            continue
-
-        df = df.dropna()
-        df["day"] = df.index.day
-
-        mask_fase = (
-            (df["day"] >= dia_ref - janela_fase) &
-            (df["day"] <= dia_ref + janela_fase)
-        )
-
-        idx_validos = df[mask_fase].index
-
-        total = 0
-        sucessos = 0
-
-        for data in idx_validos:
-
-            pos = df.index.get_loc(data)
-
-            if pos + 1 >= len(df):
-                continue
-
-            fim_janela = min(pos + dias_alvo, len(df) - 1)
-
-            close_entrada = df.iloc[pos]["Close"]
-            max_high = df.iloc[pos + 1:fim_janela + 1]["High"].max()
-
-            total += 1
-
-            if max_high >= close_entrada * alvo:
-                sucessos += 1
-
-        if total == 0:
-            continue
-
-        prob = sucessos / total * 100.0
-
-        resultados.append({
-            "Ativo": ticker,
-            "Amostras": total,
-            "Sucessos": sucessos,
-            "Probabilidade_%": round(prob, 2)
-        })
-
-    df_res = pd.DataFrame(resultados)
-
-    if df_res.empty:
-        return df_res
-
-    df_res = df_res.sort_values(
-        by=["Probabilidade_%", "Amostras"],
-        ascending=[False, False]
-    ).reset_index(drop=True)
-
-    df_res.insert(0, "Rank", df_res.index + 1)
-
-    return df_res
-
+    return 0
 
 # =========================================================
 # EXECUÇÃO
 # =========================================================
 
-st.write(f"Dia de referência da fase do mês: **{dia_referencia}**")
-
 if st.button("Rodar scanner"):
 
-    with st.spinner("Calculando..."):
-        tabela = calcula_probabilidades(
-            ativos_scan,
-            anos_historico,
-            janela_fase,
-            dia_referencia
-        )
+    hoje = datetime.now().day
+    resultados = []
 
-    if tabela.empty:
-        st.warning("Nenhum ativo passou no filtro semanal.")
+    barra = st.progress(0)
+    total = len(ativos_scan)
+
+    for i, ticker in enumerate(ativos_scan):
+
+        barra.progress((i + 1) / total)
+
+        try:
+            df = yf.download(
+                ticker,
+                period="12y",
+                auto_adjust=False,
+                progress=False
+            )
+        except:
+            continue
+
+        if df is None or len(df) < 300:
+            continue
+
+        df = df.dropna().copy()
+
+        # filtro semanal
+        try:
+            if not passa_filtro_semanal(df):
+                continue
+        except:
+            continue
+
+        classe = classe_ativo(ticker)
+        alvo, stop = parametros(classe)
+
+        dias_validos = []
+        for d in df.index:
+            if abs(d.day - hoje) <= janela_fase:
+                dias_validos.append(d)
+
+        ganhos = 0
+        perdas = 0
+        neutros = 0
+
+        for d in dias_validos:
+
+            if d not in df.index:
+                continue
+
+            idx = df.index.get_loc(d)
+
+            if idx + lookahead >= len(df):
+                continue
+
+            r = testa_trade(df, idx, alvo, stop)
+
+            if r == 1:
+                ganhos += 1
+            elif r == -1:
+                perdas += 1
+            else:
+                neutros += 1
+
+        amostras = ganhos + perdas
+
+        if amostras == 0:
+            continue
+
+        prob = ganhos / amostras * 100
+
+        resultados.append({
+            "Ativo": ticker,
+            "Classe": classe,
+            "Gain alvo (%)": alvo * 100,
+            "Stop (%)": stop * 100,
+            "Amostras válidas": amostras,
+            "Gains": ganhos,
+            "Loss": perdas,
+            "Probabilidade (%)": round(prob, 2)
+        })
+
+    if len(resultados) == 0:
+        st.warning("Nenhum ativo passou nos filtros.")
     else:
-        st.dataframe(tabela, use_container_width=True)
+        dfres = pd.DataFrame(resultados)
+        dfres = dfres.sort_values("Probabilidade (%)", ascending=False)
 
-        st.download_button(
-            "Baixar CSV",
-            tabela.to_csv(index=False).encode("utf-8"),
-            "scanner_prob5m_fase_semanal_ema169.csv",
-            "text/csv"
+        st.dataframe(
+            dfres,
+            use_container_width=True
         )
