@@ -48,14 +48,14 @@ janela_fase = st.slider("Janela da fase do mês (± dias)", 0, 5, 2)
 
 def testa_trade(df, idx):
 
-    entrada = df.iloc[idx]["Close"]
+    entrada = float(df.iloc[idx]["Close"])
     alvo_px = entrada * (1 + alvo)
     stop_px = entrada * (1 - stop)
 
     for j in range(idx + 1, min(idx + 1 + lookahead, len(df))):
 
-        hi = df.iloc[j]["High"]
-        lo = df.iloc[j]["Low"]
+        hi = float(df.iloc[j]["High"])
+        lo = float(df.iloc[j]["Low"])
 
         bate_alvo = hi >= alvo_px
         bate_stop = lo <= stop_px
@@ -100,7 +100,13 @@ if st.button("Rodar scanner"):
         if df is None or len(df) < 200:
             continue
 
-        df = df.dropna().copy()
+        # -------------------------------------------------
+        # CORREÇÃO DO PROBLEMA (MultiIndex do yfinance)
+        # -------------------------------------------------
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.droplevel(0)
+
+        df = df[["Open","High","Low","Close"]].dropna().copy()
 
         dias_validos = []
         for d in df.index:
@@ -135,7 +141,7 @@ if st.button("Rodar scanner"):
         prob = ganhos / amostras * 100
 
         resultados.append({
-            "Ativo": ticker,
+            "Ativo": ticker.replace(".SA",""),
             "Amostras": amostras,
             "Gains": ganhos,
             "Loss": perdas,
