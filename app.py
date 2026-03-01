@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase (com filtro semanal EMA 69)")
+st.title("Scanner Prob5M-Fase (com filtro semanal EMA 169)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -54,10 +54,10 @@ anos_historico = st.sidebar.slider(
 
 dias_alvo = 21
 alvo = 1.05
-ema_periodos = 69
+ema_periodos = 169
 
 st.sidebar.write("Sucesso: +5% em até 21 pregões")
-st.sidebar.write("Filtro: semanal acima da EMA 69")
+st.sidebar.write("Filtro: semanal acima da EMA 169")
 
 # =========================================================
 
@@ -65,14 +65,14 @@ hoje = datetime.now().date()
 dia_referencia = hoje.day
 
 # =========================================================
-# FUNÇÃO: FILTRO SEMANAL EMA 69
+# FILTRO SEMANAL EMA 169
 # =========================================================
 
 def passa_filtro_semanal(ticker):
 
     dfw = yf.download(
         ticker,
-        period="5y",
+        period="8y",
         interval="1wk",
         auto_adjust=False,
         progress=False
@@ -83,10 +83,10 @@ def passa_filtro_semanal(ticker):
 
     dfw = dfw.dropna()
 
-    dfw["EMA69"] = dfw["Close"].ewm(span=ema_periodos, adjust=False).mean()
+    dfw["EMA169"] = dfw["Close"].ewm(span=ema_periodos, adjust=False).mean()
 
     close_atual = dfw["Close"].iloc[-1]
-    ema_atual = dfw["EMA69"].iloc[-1]
+    ema_atual = dfw["EMA169"].iloc[-1]
 
     return close_atual > ema_atual
 
@@ -124,7 +124,7 @@ def calcula_probabilidades(tickers, anos, janela_fase, dia_ref):
             continue
 
         # -----------------------------
-        # filtro semanal EMA 69
+        # filtro semanal EMA 169
         # -----------------------------
         try:
             if not passa_filtro_semanal(ticker):
@@ -216,6 +216,6 @@ if st.button("Rodar scanner"):
         st.download_button(
             "Baixar CSV",
             tabela.to_csv(index=False).encode("utf-8"),
-            "scanner_prob5m_fase_semanal.csv",
+            "scanner_prob5m_fase_semanal_ema169.csv",
             "text/csv"
         )
