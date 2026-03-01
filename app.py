@@ -1,10 +1,10 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase – +5% antes de -3% em 21 pregões")
+st.title("Scanner Prob5M-Fase (pregão do mês) – +5% antes de −3% em 21 pregões")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -40,10 +40,10 @@ lookahead = 21
 alvo = 0.05
 stop = 0.03
 
-janela_fase = st.slider("Janela da fase do mês (± dias)", 0, 5, 2)
+usar_filtro_semanal = st.checkbox("Aplicar filtro semanal (Close > EMA 169)", value=True)
 
 # =========================================================
-# Função robusta para padronizar OHLC
+# Funções utilitárias
 # =========================================================
 
 def normaliza_ohlc(df):
@@ -59,12 +59,29 @@ def normaliza_ohlc(df):
         return None
 
     df2 = df[[cols["open"], cols["high"], cols["low"], cols["close"]]].copy()
-    df2.columns = ["Open", "High", "Low", "Close"]
-
+    df2.columns = ["Open","High","Low","Close"]
     return df2.dropna()
 
+def calcula_pregao_do_mes(df):
+
+    tmp = df.copy()
+    tmp["ano_mes"] = tmp.index.to_period("M")
+    tmp["pregao_mes"] = tmp.groupby("ano_mes").cumcount() + 1
+    return tmp
+
+def passa_filtro_semanal_ema169(df_diario):
+
+    semanal = df_diario["Close"].resample("W-FRI").last().dropna()
+
+    if len(semanal) < 200:
+        return False
+
+    ema169 = semanal.ewm(span=169, adjust=False).mean()
+
+    return semanal.iloc[-1] > ema169.iloc[-1]
+
 # =========================================================
-# TESTE: alvo antes do stop
+# Teste do trade
 # =========================================================
 
 def testa_trade(df, idx):
@@ -98,7 +115,6 @@ def testa_trade(df, idx):
 
 if st.button("Rodar scanner"):
 
-    hoje = datetime.now().day
     resultados = []
 
     barra = st.progress(0)
@@ -118,27 +134,35 @@ if st.button("Rodar scanner"):
         except:
             continue
 
-        if df_raw is None or len(df_raw) < 150:
+        if df_raw is None or len(df_raw) < 300:
             continue
 
         df = normaliza_ohlc(df_raw)
 
-        if df is None or len(df) < 150:
+        if df is None or len(df) < 300:
             continue
 
-        dias_validos = []
+        # -------------------------------------------------
+        # filtro semanal (somente no momento atual)
+        # -------------------------------------------------
+        if usar_filtro_semanal:
+            if not passa_filtro_semanal_ema169(df):
+                continue
 
-        for d in df.index:
-            if abs(d.day - hoje) <= janela_fase:
-                dias_validos.append(d)
+        # -------------------------------------------------
+        # cálculo do pregão do mês
+        # -------------------------------------------------
+        df = calcula_pregao_do_mes(df)
+
+        # pregão do mês do candle mais recente
+        pregao_atual = int(df["pregao_mes"].iloc[-1])
 
         ganhos = 0
         perdas = 0
 
-        for d in dias_validos:
+        idxs = df.index[df["pregao_mes"] == pregao_atual]
 
-            if d not in df.index:
-                continue
+        for d in idxs:
 
             idx = df.index.get_loc(d)
 
@@ -161,6 +185,7 @@ if st.button("Rodar scanner"):
 
         resultados.append({
             "Ativo": ticker.replace(".SA",""),
+            "Pregão do mês atual": pregao_atual,
             "Amostras": amostras,
             "Gains": ganhos,
             "Loss": perdas,
@@ -168,7 +193,7 @@ if st.button("Rodar scanner"):
         })
 
     if len(resultados) == 0:
-        st.warning("Nenhum ativo gerou amostras válidas.")
+        st.warning("Nenhum ativo passou nos filtros.")
     else:
         dfres = pd.DataFrame(resultados)
         dfres = dfres.sort_values(
