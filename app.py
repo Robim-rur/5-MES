@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase – +5% antes de -3% com filtro semanal (EMA 169)")
+st.title("Scanner Prob5M-Fase – +5% antes de -3% (sem filtro de tendência)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -39,26 +39,8 @@ ativos_scan = sorted(set([
 lookahead = 21
 alvo = 0.05
 stop = 0.03
-ema_periodo = 169
 
 janela_fase = st.slider("Janela da fase do mês (± dias)", 0, 5, 2)
-
-# =========================================================
-# FILTRO SEMANAL (EMA 169)
-# =========================================================
-
-def passa_filtro_semanal(df):
-
-    w = df.resample("W-FRI").last()
-
-    if len(w) < ema_periodo + 5:
-        return False
-
-    w["ema"] = w["Close"].ewm(span=ema_periodo, adjust=False).mean()
-
-    ultimo = w.iloc[-1]
-
-    return ultimo["Close"] > ultimo["ema"]
 
 # =========================================================
 # TESTE: alvo antes do stop
@@ -115,19 +97,11 @@ if st.button("Rodar scanner"):
         except:
             continue
 
-        if df is None or len(df) < 300:
+        if df is None or len(df) < 200:
             continue
 
         df = df.dropna().copy()
 
-        # filtro semanal
-        try:
-            if not passa_filtro_semanal(df):
-                continue
-        except:
-            continue
-
-        # mesma fase do mês
         dias_validos = []
         for d in df.index:
             if abs(d.day - hoje) <= janela_fase:
@@ -169,7 +143,7 @@ if st.button("Rodar scanner"):
         })
 
     if len(resultados) == 0:
-        st.warning("Nenhum ativo passou no filtro semanal (EMA 169) e na fase do mês.")
+        st.warning("Nenhum ativo gerou amostras válidas.")
     else:
         dfres = pd.DataFrame(resultados)
         dfres = dfres.sort_values(
