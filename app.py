@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase – +5% antes de -3% (sem filtro de tendência)")
+st.title("Scanner Prob5M-Fase – +5% antes de -3% em 21 pregões")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -41,6 +41,27 @@ alvo = 0.05
 stop = 0.03
 
 janela_fase = st.slider("Janela da fase do mês (± dias)", 0, 5, 2)
+
+# =========================================================
+# Função robusta para padronizar OHLC
+# =========================================================
+
+def normaliza_ohlc(df):
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(0)
+
+    cols = {c.lower(): c for c in df.columns}
+
+    needed = ["open", "high", "low", "close"]
+
+    if not all(c in cols for c in needed):
+        return None
+
+    df2 = df[[cols["open"], cols["high"], cols["low"], cols["close"]]].copy()
+    df2.columns = ["Open", "High", "Low", "Close"]
+
+    return df2.dropna()
 
 # =========================================================
 # TESTE: alvo antes do stop
@@ -88,7 +109,7 @@ if st.button("Rodar scanner"):
         barra.progress((i + 1) / total)
 
         try:
-            df = yf.download(
+            df_raw = yf.download(
                 ticker,
                 period="12y",
                 progress=False,
@@ -97,18 +118,16 @@ if st.button("Rodar scanner"):
         except:
             continue
 
-        if df is None or len(df) < 200:
+        if df_raw is None or len(df_raw) < 150:
             continue
 
-        # -------------------------------------------------
-        # CORREÇÃO DO PROBLEMA (MultiIndex do yfinance)
-        # -------------------------------------------------
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(0)
+        df = normaliza_ohlc(df_raw)
 
-        df = df[["Open","High","Low","Close"]].dropna().copy()
+        if df is None or len(df) < 150:
+            continue
 
         dias_validos = []
+
         for d in df.index:
             if abs(d.day - hoje) <= janela_fase:
                 dias_validos.append(d)
