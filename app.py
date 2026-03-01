@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase (com filtro semanal EMA 169)")
+st.title("Scanner Prob5M-Fase (filtro semanal por resample, EMA 169)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -38,19 +38,8 @@ ativos_scan = sorted(set([
 
 st.sidebar.header("Parâmetros")
 
-janela_fase = st.sidebar.slider(
-    "Janela da fase do mês (± dias)",
-    min_value=0,
-    max_value=5,
-    value=2
-)
-
-anos_historico = st.sidebar.slider(
-    "Anos de histórico",
-    min_value=3,
-    max_value=15,
-    value=8
-)
+janela_fase = st.sidebar.slider("Janela da fase do mês (± dias)", 0, 5, 2)
+anos_historico = st.sidebar.slider("Anos de histórico", 3, 15, 8)
 
 dias_alvo = 21
 alvo = 1.05
@@ -65,30 +54,37 @@ hoje = datetime.now().date()
 dia_referencia = hoje.day
 
 # =========================================================
-# FILTRO SEMANAL EMA 169
+# FILTRO SEMANAL CORRETO (resample do diário)
 # =========================================================
 
 def passa_filtro_semanal(ticker):
 
-    dfw = yf.download(
+    df = yf.download(
         ticker,
-        period="8y",
-        interval="1wk",
-        auto_adjust=False,
+        period="10y",
+        interval="1d",
         progress=False
     )
 
-    if dfw is None or len(dfw) < ema_periodos + 5:
+    if df is None or len(df) < 300:
         return False
 
-    dfw = dfw.dropna()
+    df = df.dropna()
 
-    dfw["EMA169"] = dfw["Close"].ewm(span=ema_periodos, adjust=False).mean()
+    # semanal padrão B3 (sexta)
+    semanal = pd.DataFrame()
+    semanal["Close"] = df["Close"].resample("W-FRI").last()
 
-    close_atual = dfw["Close"].iloc[-1]
-    ema_atual = dfw["EMA169"].iloc[-1]
+    semanal = semanal.dropna()
 
-    return close_atual > ema_atual
+    if len(semanal) < ema_periodos + 5:
+        return False
+
+    semanal["EMA"] = semanal["Close"].ewm(
+        span=ema_periodos, adjust=False
+    ).mean()
+
+    return semanal["Close"].iloc[-1] > semanal["EMA"].iloc[-1]
 
 
 # =========================================================
@@ -123,9 +119,7 @@ def calcula_probabilidades(tickers, anos, janela_fase, dia_ref):
         if df is None or len(df) < 150:
             continue
 
-        # -----------------------------
-        # filtro semanal EMA 169
-        # -----------------------------
+        # filtro semanal
         try:
             if not passa_filtro_semanal(ticker):
                 continue
@@ -148,9 +142,6 @@ def calcula_probabilidades(tickers, anos, janela_fase, dia_ref):
         for data in idx_validos:
 
             pos = df.index.get_loc(data)
-
-            if isinstance(pos, slice):
-                continue
 
             if pos + 1 >= len(df):
                 continue
@@ -200,7 +191,7 @@ st.write(f"Dia de referência da fase do mês: **{dia_referencia}**")
 
 if st.button("Rodar scanner"):
 
-    with st.spinner("Baixando dados e calculando probabilidades..."):
+    with st.spinner("Calculando..."):
         tabela = calcula_probabilidades(
             ativos_scan,
             anos_historico,
