@@ -1,9 +1,10 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("Scanner Prob5M-Fase – +5% antes de −3% (21 pregões)")
+st.title("Scanner – Probabilidade de Gain antes do Loss (21 pregões)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -32,144 +33,130 @@ ativos_scan = sorted(set([
 ]))
 
 # =========================================================
-# PARÂMETROS
+# FUNÇÃO DE TESTE DE TRADE
 # =========================================================
 
-lookahead = 21
-alvo = 0.05
-stop = 0.03
+def testa_trade(df, i, gain, loss, max_bars=21):
 
-# =========================================================
-# Funções
-# =========================================================
+    entrada = df["Close"].iloc[i]
 
-def normaliza_ohlc(df):
+    alvo = entrada * (1 + gain)
+    stop = entrada * (1 - loss)
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.droplevel(0)
+    max_i = min(i + max_bars, len(df) - 1)
 
-    cols = {c.lower(): c for c in df.columns}
-    needed = ["open","high","low","close"]
+    for j in range(i + 1, max_i + 1):
 
-    if not all(c in cols for c in needed):
-        return None
+        h = df["High"].iloc[j]
+        l = df["Low"].iloc[j]
 
-    out = df[[cols["open"],cols["high"],cols["low"],cols["close"]]].copy()
-    out.columns = ["Open","High","Low","Close"]
-    return out.dropna()
-
-
-def adiciona_pregao_mes(df):
-
-    tmp = df.copy()
-    tmp["ano_mes"] = tmp.index.to_period("M")
-    tmp["pregao_mes"] = tmp.groupby("ano_mes").cumcount() + 1
-    return tmp
-
-
-def testa_trade(df, idx):
-
-    entrada = float(df.iloc[idx]["Close"])
-    alvo_px = entrada * (1 + alvo)
-    stop_px = entrada * (1 - stop)
-
-    for j in range(idx + 1, min(idx + 1 + lookahead, len(df))):
-
-        hi = float(df.iloc[j]["High"])
-        lo = float(df.iloc[j]["Low"])
-
-        bate_alvo = hi >= alvo_px
-        bate_stop = lo <= stop_px
+        bate_alvo = h >= alvo
+        bate_stop = l <= stop
 
         if bate_alvo and bate_stop:
+            # pior caso: stop primeiro
             return 0
+
+        if bate_stop:
+            return 0
+
         if bate_alvo:
             return 1
-        if bate_stop:
-            return -1
 
-    return 0
+    return None   # nenhum dos dois aconteceu
+
+
+# =========================================================
+# FUNÇÃO DE BACKTEST
+# =========================================================
+
+def roda_estudo(df, gain, loss, max_bars=21):
+
+    resultados = []
+
+    for i in range(len(df) - max_bars - 1):
+
+        r = testa_trade(df, i, gain, loss, max_bars)
+
+        if r is not None:
+            resultados.append(r)
+
+    if len(resultados) == 0:
+        return None, 0
+
+    prob = np.mean(resultados)
+
+    return prob, len(resultados)
 
 
 # =========================================================
 # EXECUÇÃO
 # =========================================================
 
-if st.button("Rodar scanner"):
+st.info("Cenários avaliados: 5% x 4%  e  6% x 4%  | janela: 21 pregões")
 
-    resultados = []
+dados = []
 
-    barra = st.progress(0)
-    total = len(ativos_scan)
+progress = st.progress(0)
 
-    for i, ticker in enumerate(ativos_scan):
+for n, ticker in enumerate(ativos_scan):
 
-        barra.progress((i + 1) / total)
+    progress.progress((n + 1) / len(ativos_scan))
 
-        try:
-            df_raw = yf.download(
-                ticker,
-                period="12y",
-                progress=False,
-                auto_adjust=False
-            )
-        except:
+    try:
+
+        df = yf.download(
+            ticker,
+            period="8y",
+            interval="1d",
+            progress=False,
+            auto_adjust=False
+        )
+
+        if df is None or df.empty:
             continue
 
-        if df_raw is None or len(df_raw) < 300:
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        colunas = ["Open", "High", "Low", "Close"]
+
+        if not all(c in df.columns for c in colunas):
             continue
 
-        df = normaliza_ohlc(df_raw)
+        df = df[colunas].dropna().copy()
 
-        if df is None or len(df) < 300:
+        if len(df) < 200:
             continue
 
-        df = adiciona_pregao_mes(df)
+        p54, am54 = roda_estudo(df, gain=0.05, loss=0.04, max_bars=21)
+        p64, am64 = roda_estudo(df, gain=0.06, loss=0.04, max_bars=21)
 
-        # pregão do mês mais recente
-        pregao_atual = int(df["pregao_mes"].iloc[-1])
-
-        ganhos = 0
-        perdas = 0
-
-        idxs = df.index[df["pregao_mes"] == pregao_atual]
-
-        for d in idxs:
-
-            idx = df.index.get_loc(d)
-
-            if idx + lookahead >= len(df):
-                continue
-
-            r = testa_trade(df, idx)
-
-            if r == 1:
-                ganhos += 1
-            elif r == -1:
-                perdas += 1
-
-        amostras = ganhos + perdas
-
-        if amostras == 0:
+        if p54 is None and p64 is None:
             continue
 
-        prob = ganhos / amostras * 100
-
-        resultados.append({
-            "Ativo": ticker.replace(".SA",""),
-            "Pregão do mês": pregao_atual,
-            "Amostras": amostras,
-            "Gains": ganhos,
-            "Loss": perdas,
-            "Probabilidade +5% antes -3% (%)": round(prob, 2)
+        dados.append({
+            "Ativo": ticker.replace(".SA", ""),
+            "Prob 5%/4%": None if p54 is None else round(p54 * 100, 2),
+            "Amostras 5%/4%": am54,
+            "Prob 6%/4%": None if p64 is None else round(p64 * 100, 2),
+            "Amostras 6%/4%": am64
         })
 
-    if len(resultados) == 0:
-        st.warning("Nenhum ativo gerou amostras válidas.")
-    else:
-        dfres = pd.DataFrame(resultados)
-        dfres = dfres.sort_values(
-            "Probabilidade +5% antes -3% (%)",
-            ascending=False
-        )
-        st.dataframe(dfres, use_container_width=True)
+    except Exception:
+        continue
+
+
+df_res = pd.DataFrame(dados)
+
+if df_res.empty:
+    st.warning("Nenhum ativo gerou amostras válidas.")
+else:
+
+    df_res = df_res.sort_values(
+        by=["Prob 5%/4%", "Prob 6%/4%"],
+        ascending=False,
+        na_position="last"
+    )
+
+    st.dataframe(df_res, use_container_width=True)
