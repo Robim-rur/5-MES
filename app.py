@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("Scanner – Probabilidade de Gain antes do Loss (21 pregões)")
+st.title("Scanner – Probabilidade e Expectativa (21 pregões)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -54,7 +54,6 @@ def testa_trade(df, i, gain, loss, max_bars=21):
         bate_stop = l <= stop
 
         if bate_alvo and bate_stop:
-            # pior caso: stop primeiro
             return 0
 
         if bate_stop:
@@ -63,11 +62,11 @@ def testa_trade(df, i, gain, loss, max_bars=21):
         if bate_alvo:
             return 1
 
-    return None   # nenhum dos dois aconteceu
+    return None
 
 
 # =========================================================
-# FUNÇÃO DE BACKTEST
+# BACKTEST
 # =========================================================
 
 def roda_estudo(df, gain, loss, max_bars=21):
@@ -84,7 +83,7 @@ def roda_estudo(df, gain, loss, max_bars=21):
     if len(resultados) == 0:
         return None, 0
 
-    prob = np.mean(resultados)
+    prob = float(np.mean(resultados))
 
     return prob, len(resultados)
 
@@ -93,7 +92,7 @@ def roda_estudo(df, gain, loss, max_bars=21):
 # EXECUÇÃO
 # =========================================================
 
-st.info("Cenários avaliados: 5% x 4%  e  6% x 4%  | janela: 21 pregões")
+st.info("Cenários: 5% gain / 4% loss  e  6% gain / 4% loss  | Janela: 21 pregões")
 
 dados = []
 
@@ -126,7 +125,7 @@ for n, ticker in enumerate(ativos_scan):
 
         df = df[colunas].dropna().copy()
 
-        if len(df) < 200:
+        if len(df) < 300:
             continue
 
         p54, am54 = roda_estudo(df, gain=0.05, loss=0.04, max_bars=21)
@@ -135,12 +134,25 @@ for n, ticker in enumerate(ativos_scan):
         if p54 is None and p64 is None:
             continue
 
+        # Expectativa matemática
+        exp54 = None
+        exp64 = None
+
+        if p54 is not None:
+            exp54 = p54 * 0.05 - (1 - p54) * 0.04
+
+        if p64 is not None:
+            exp64 = p64 * 0.06 - (1 - p64) * 0.04
+
         dados.append({
             "Ativo": ticker.replace(".SA", ""),
             "Prob 5%/4%": None if p54 is None else round(p54 * 100, 2),
             "Amostras 5%/4%": am54,
+            "Expectativa 5%/4%": None if exp54 is None else round(exp54 * 100, 2),
+
             "Prob 6%/4%": None if p64 is None else round(p64 * 100, 2),
-            "Amostras 6%/4%": am64
+            "Amostras 6%/4%": am64,
+            "Expectativa 6%/4%": None if exp64 is None else round(exp64 * 100, 2),
         })
 
     except Exception:
@@ -154,7 +166,7 @@ if df_res.empty:
 else:
 
     df_res = df_res.sort_values(
-        by=["Prob 5%/4%", "Prob 6%/4%"],
+        by=["Expectativa 5%/4%", "Prob 5%/4%"],
         ascending=False,
         na_position="last"
     )
