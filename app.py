@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Scanner Probabilístico – +5% em até 21 pregões (fase do mês)")
+st.title("Scanner Prob5M-Fase (com filtro semanal EMA 69)")
 
 # =========================================================
 # LISTA FIXA DE ATIVOS
@@ -54,15 +54,42 @@ anos_historico = st.sidebar.slider(
 
 dias_alvo = 21
 alvo = 1.05
+ema_periodos = 69
 
 st.sidebar.write("Sucesso: +5% em até 21 pregões")
+st.sidebar.write("Filtro: semanal acima da EMA 69")
 
-# =========================================================
-# DATA ATUAL (referência de fase do mês)
 # =========================================================
 
 hoje = datetime.now().date()
 dia_referencia = hoje.day
+
+# =========================================================
+# FUNÇÃO: FILTRO SEMANAL EMA 69
+# =========================================================
+
+def passa_filtro_semanal(ticker):
+
+    dfw = yf.download(
+        ticker,
+        period="5y",
+        interval="1wk",
+        auto_adjust=False,
+        progress=False
+    )
+
+    if dfw is None or len(dfw) < ema_periodos + 5:
+        return False
+
+    dfw = dfw.dropna()
+
+    dfw["EMA69"] = dfw["Close"].ewm(span=ema_periodos, adjust=False).mean()
+
+    close_atual = dfw["Close"].iloc[-1]
+    ema_atual = dfw["EMA69"].iloc[-1]
+
+    return close_atual > ema_atual
+
 
 # =========================================================
 # FUNÇÃO PRINCIPAL
@@ -93,7 +120,16 @@ def calcula_probabilidades(tickers, anos, janela_fase, dia_ref):
         except Exception:
             continue
 
-        if df is None or len(df) < 100:
+        if df is None or len(df) < 150:
+            continue
+
+        # -----------------------------
+        # filtro semanal EMA 69
+        # -----------------------------
+        try:
+            if not passa_filtro_semanal(ticker):
+                continue
+        except Exception:
             continue
 
         df = df.dropna()
@@ -129,10 +165,10 @@ def calcula_probabilidades(tickers, anos, janela_fase, dia_ref):
             if max_high >= close_entrada * alvo:
                 sucessos += 1
 
-        if total > 0:
-            prob = sucessos / total * 100.0
-        else:
-            prob = 0.0
+        if total == 0:
+            continue
+
+        prob = sucessos / total * 100.0
 
         resultados.append({
             "Ativo": ticker,
@@ -143,7 +179,7 @@ def calcula_probabilidades(tickers, anos, janela_fase, dia_ref):
 
     df_res = pd.DataFrame(resultados)
 
-    if len(df_res) == 0:
+    if df_res.empty:
         return df_res
 
     df_res = df_res.sort_values(
@@ -173,13 +209,13 @@ if st.button("Rodar scanner"):
         )
 
     if tabela.empty:
-        st.warning("Nenhum resultado encontrado.")
+        st.warning("Nenhum ativo passou no filtro semanal.")
     else:
         st.dataframe(tabela, use_container_width=True)
 
         st.download_button(
             "Baixar CSV",
             tabela.to_csv(index=False).encode("utf-8"),
-            "scanner_prob_5pct_21pregoes.csv",
+            "scanner_prob5m_fase_semanal.csv",
             "text/csv"
         )
